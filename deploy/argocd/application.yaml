@@ -6,7 +6,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/CavaiLAB/rectify.git
+    repoURL: ssh://git@ssh.github.com:443/CavaiLAB/rectify.git
     targetRevision: main
     path: deploy/k8s/qd
   destination:
