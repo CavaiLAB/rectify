@@ -77,6 +77,65 @@ async function fixture(t: TestContext) {
   return { request, setup, issue, base, cookie, dir, db, admin, member };
 }
 
+test("登记只传描述时自动生成标题，后续修改不重写既有标题", async (t) => {
+  const f = await fixture(t);
+  const { project, feature } = await f.setup();
+  const response = await f.request(`/projects/${project.id}/issues`, "POST", {
+    feature_id: feature.id,
+    description: "您好，环样性能保存失败。重新进入后为空。",
+    type: "问题缺陷",
+  });
+  assert.equal(response.status, 201);
+  const created = await response.json();
+  assert.equal(created.title, "环样性能保存失败");
+  const updated = await (
+    await f.request(`/issues/${created.id}`, "PATCH", {
+      ...created,
+      description: "补充说明：已恢复正常。",
+    })
+  ).json();
+  assert.equal(updated.title, created.title);
+  const legacy = await (
+    await f.issue(project.id, feature.id, { title: "旧客户端自定义标题" })
+  ).json();
+  assert.equal(legacy.title, "旧客户端自定义标题");
+});
+
+test("外部接口仅传描述也可登记，幂等重试不重复生成问题", async (t) => {
+  const f = await fixture(t);
+  const { project, feature } = await f.setup();
+  const integration = await (
+    await f.request(`/projects/${project.id}/integrations`, "POST", {
+      name: "测试系统",
+    })
+  ).json();
+  const request = {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${integration.api_key}`,
+      "Content-Type": "application/json",
+      "Idempotency-Key": "auto-title-request-01",
+    },
+    body: JSON.stringify({
+      feature_id: feature.id,
+      description:
+        "操作步骤：\n1. 打开报表\n实际结果：导出失败，提示格式错误。",
+    }),
+  };
+  const first = await fetch(`${f.base}/api/external/v1/issues`, request);
+  assert.equal(first.status, 201);
+  const receipt = await first.json();
+  const retry = await fetch(`${f.base}/api/external/v1/issues`, request);
+  assert.equal(retry.status, 200);
+  assert.deepEqual(await retry.json(), receipt);
+  const detail = await (await f.request(`/issues/${receipt.id}`)).json();
+  assert.equal(detail.title, "导出失败，提示格式错误");
+  assert.equal(
+    (await (await f.request(`/projects/${project.id}/issues`)).json()).length,
+    1,
+  );
+});
+
 test("所有业务接口和图片均需登录，公开接口不泄露用户", async (t) => {
   const f = await fixture(t);
   for (const path of [

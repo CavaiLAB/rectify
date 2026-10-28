@@ -1469,7 +1469,6 @@ function IssueDialog({
           "data",
           JSON.stringify({
             feature_id: data.feature_id,
-            title: data.title,
             description: data.description,
             type: data.type,
           }),
@@ -1600,16 +1599,18 @@ function IssueDialog({
             {(isNew || detail) && (
               <>
                 <fieldset disabled={busy || readOnly}>
-                  <Field label="问题标题 *">
-                    <input
-                      autoFocus
-                      required
-                      maxLength={120}
-                      value={values.title}
-                      onChange={(e) => change("title", e.target.value)}
-                      placeholder="用一句话说明问题或希望增加的功能"
-                    />
-                  </Field>
+                  {!isNew && (
+                    <Field label="问题标题 *">
+                      <input
+                        autoFocus
+                        required
+                        maxLength={120}
+                        value={values.title}
+                        onChange={(e) => change("title", e.target.value)}
+                        placeholder="用一句话说明问题或希望增加的功能"
+                      />
+                    </Field>
+                  )}
                   <div className="form-grid">
                     <Field label="功能项 *">
                       <select
@@ -1683,6 +1684,7 @@ function IssueDialog({
                   )}
                   <Field label="问题描述 *">
                     <textarea
+                      autoFocus={isNew}
                       required
                       rows={4}
                       maxLength={10000}
@@ -1693,6 +1695,11 @@ function IssueDialog({
                       }
                     />
                   </Field>
+                  {isNew && (
+                    <p className="field-hint">
+                      直接描述问题即可，提交后会自动生成简短标题。
+                    </p>
+                  )}
                   {!isNew && (
                     <div className="form-grid thirds">
                       <Field label="责任人">

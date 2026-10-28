@@ -13,6 +13,7 @@ import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { openDatabase, createUser, type DB } from "./db.ts";
 import { hashPassword, verifyPassword } from "./password.ts";
+import { summarizeIssueTitle } from "./issue-title.ts";
 import {
   registerExternalRoutes,
   registerIntegrationAdminRoutes,
@@ -57,6 +58,7 @@ const updateSchema = issueSchema.extend({
 });
 const registrationSchema = issueSchema
   .pick({ feature_id: true, title: true, description: true, type: true })
+  .extend({ title: text(120).optional() })
   .strict();
 const issueSelect = `SELECT i.*, f.name feature_name, u.name assignee_name,
   g.name source_system, x.reporter_name, x.source_path,
@@ -420,7 +422,7 @@ export function createApp(options: {
             count.n,
             projectId,
             data.feature_id,
-            data.title,
+            data.title ?? summarizeIssueTitle(data.description),
             data.description,
             data.type,
             "普通",
