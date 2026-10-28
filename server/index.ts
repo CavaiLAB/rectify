@@ -8,7 +8,13 @@ const { app, db } = createApp({
     process.env.COOKIE_SECURE === undefined
       ? undefined
       : process.env.COOKIE_SECURE === "true",
-  trustProxy: Number(process.env.TRUST_PROXY ?? 0),
+  trustProxy:
+    process.env.TRUSTED_PROXIES !== undefined
+      ? process.env.TRUSTED_PROXIES.split(",")
+          .map((value) => value.trim())
+          .filter(Boolean)
+      : Number(process.env.TRUST_PROXY ?? 0),
+  revision: process.env.APP_REVISION,
 });
 const server = app.listen(port, host, () =>
   console.log(`Rectify: http://${host}:${port}`),

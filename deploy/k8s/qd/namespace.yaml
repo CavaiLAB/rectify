@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: rectify
+  labels:
+    app.kubernetes.io/name: rectify
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: v1.35
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
