@@ -1,0 +1,30 @@
+services:
+  rectify:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3188:3188"
+    environment:
+      NODE_ENV: production
+      # 仅本机 HTTP 预览可为 false；公开 HTTPS 部署必须设为 true。
+      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+      TRUST_PROXY: "${TRUST_PROXY:-0}"
+    volumes:
+      - rectify-data:/app/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3188/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+volumes:
+  rectify-data:
