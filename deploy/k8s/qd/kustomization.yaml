@@ -10,4 +10,4 @@ resources:
 images:
   - name: rectify
     newName: 192.168.1.201/library/rectify
-    digest: sha256:cbc23dbc22b67d306ac3dc80e2f46ccb161cdd4f34207d40658b110fab0f30ab
+    digest: sha256:b128f0d4dc709c25b15d61dd3e9bb7f6088fcde73e087abb9513f4623d77c133
