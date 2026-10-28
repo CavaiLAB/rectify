@@ -95,7 +95,8 @@ export function createApp(options: {
   dataDir: string;
   production?: boolean;
   secureCookies?: boolean;
-  trustProxy?: number;
+  trustProxy?: number | string | string[];
+  revision?: string;
   webDir?: string;
 }) {
   const db = openDatabase(options.dataDir);
@@ -115,7 +116,9 @@ export function createApp(options: {
     res.set("Cache-Control", "no-store");
     next();
   });
-  app.get("/api/health", (_req, res) => res.json({ ok: true }));
+  app.get("/api/health", (_req, res) =>
+    res.json({ ok: true, revision: options.revision ?? "development" }),
+  );
   const upload = multer({
     storage: multer.memoryStorage(),
     limits: {

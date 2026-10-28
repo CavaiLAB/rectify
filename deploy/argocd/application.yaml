@@ -1,0 +1,19 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: rectify
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/CavaiLAB/rectify.git
+    targetRevision: main
+    path: deploy/k8s/qd
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: rectify
+  # 手动同步；不自动删除资源，也不改既有应用的同步策略。
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+      - ApplyOutOfSyncOnly=true

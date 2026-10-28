@@ -1,0 +1,20 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: rectify
+  annotations:
+    metallb.io/loadBalancerIPs: 192.168.1.213
+spec:
+  type: LoadBalancer
+  allocateLoadBalancerNodePorts: false
+  externalTrafficPolicy: Local
+  loadBalancerSourceRanges:
+    - 10.77.0.1/32
+    - 192.168.1.161/32
+  selector:
+    app.kubernetes.io/name: rectify
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
