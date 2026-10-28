@@ -5,6 +5,7 @@ import { parse, parseAllDocuments } from "yaml";
 const file = (name: string) =>
   parse(readFileSync(`deploy/k8s/qd/${name}.yaml`, "utf8"));
 test("k3s单实例、持久化、非root与HTTPS配置不退化", () => {
+  assert.match(file("kustomization").images[0].digest, /^sha256:[a-f0-9]{64}$/);
   const deployment = file("deployment");
   const pod = deployment.spec.template.spec;
   const container = pod.containers[0];

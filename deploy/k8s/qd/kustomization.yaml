@@ -10,4 +10,4 @@ resources:
 images:
   - name: rectify
     newName: 192.168.1.201/library/rectify
-    newTag: git-bbe0a9e72ba4
+    digest: sha256:cbc23dbc22b67d306ac3dc80e2f46ccb161cdd4f34207d40658b110fab0f30ab
