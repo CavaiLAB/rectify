@@ -11,6 +11,7 @@
 - Service / NetworkPolicy 仅允许网关与 qd 管理入口。应用只信任网关 `10.77.0.1/32` 的转发头，网关覆盖客户端传入的相关头。
 - `COOKIE_SECURE=true`，未登录不能访问项目、问题或图片。账号与原数据迁移，不提供默认密码或公开注册。
 - Argo Application `rectify` 读取本仓库 `main:deploy/k8s/qd`，手动同步，未启用 prune / self-heal。命名空间、存储类、PVC 带删除保护。
+- 集群内 GitHub HTTPS 访问可能被重置，Argo 源使用 GitHub 官方 SSH 443：`ssh://git@ssh.github.com:443/CavaiLAB/rectify.git`。只读部署密钥放在 `argocd/rectify-repo-ssh` repository Secret；密钥不进仓库、不复用其他项目凭据，SSH 主机密钥沿用集群已验证的 GitHub known-hosts。
 
 ## 构建和发布
 
