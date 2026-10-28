@@ -9,6 +9,7 @@ import { rateLimit } from "express-rate-limit";
 import { z } from "zod";
 import type { DB } from "./db.ts";
 import { ISSUE_TYPES } from "../shared/types.ts";
+import { summarizeIssueTitle } from "./issue-title.ts";
 
 interface Integration {
   id: string;
@@ -42,7 +43,7 @@ const hash = (value: string) =>
 const submission = z
   .object({
     feature_id: z.uuid(),
-    title: z.string().trim().min(1).max(120),
+    title: z.string().trim().min(1).max(120).optional(),
     description: z.string().trim().min(1).max(10000),
     type: z.enum(ISSUE_TYPES).default("问题缺陷"),
     reporter_id: z.string().trim().max(100).default(""),
@@ -172,7 +173,7 @@ export function registerExternalRoutes(app: Express, s: Services) {
             number,
             integration.project_id,
             data.feature_id,
-            data.title,
+            data.title ?? summarizeIssueTitle(data.description),
             data.description,
             data.type,
             now,

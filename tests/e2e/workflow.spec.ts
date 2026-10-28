@@ -27,16 +27,14 @@ test("项目、功能项、新需求、图片、整改、复验关闭与刷新�
     .click();
   await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   await page.getByRole("button", { name: "登记问题", exact: true }).click();
-  await page
-    .getByLabel("问题标题 *", { exact: true })
-    .fill("增加按月份导出报表");
+  await expect(page.getByLabel("问题标题 *", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "没有合适的？添加功能项" }).click();
   await page.getByLabel("新功能项名称").fill("报表管理");
   await page.getByRole("button", { name: "添加并选择" }).click();
   await page.getByLabel("问题类型 *", { exact: true }).selectOption("新增功能");
   await page
     .getByLabel("问题描述 *", { exact: true })
-    .fill("希望按月份选择数据并导出，用于每月核对。");
+    .fill("增加按月份导出报表。希望按月份选择数据并导出，用于每月核对。");
   await expect(page.getByLabel("责任人", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("优先级", { exact: true })).toHaveCount(0);
   await expect(page.getByLabel("计划完成日期", { exact: true })).toHaveCount(0);
@@ -70,9 +68,16 @@ test("项目、功能项、新需求、图片、整改、复验关闭与刷新�
     }, buffer.toString("base64"));
   await expect(page.getByAltText("clipboard-1.png")).toBeVisible();
   await expect(page.getByAltText("clipboard-2.png")).toBeVisible();
+  await page.screenshot({
+    path: testInfo.outputPath("description-only.png"),
+    fullPage: true,
+  });
   await page.getByRole("button", { name: "提交问题", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.getByRole("button", { name: "#001 增加按月份导出报表" }).click();
+  await expect(page.getByLabel("问题标题 *", { exact: true })).toHaveValue(
+    "增加按月份导出报表",
+  );
   await expect(page.getByAltText("sample.png")).toBeVisible();
   await expect(page.getByAltText("clipboard-1.png")).toBeVisible();
   await page
