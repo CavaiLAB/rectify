@@ -37,9 +37,9 @@ test("项目、功能项、新需求、图片、整改、复验关闭与刷新�
   await page
     .getByLabel("问题描述 *", { exact: true })
     .fill("希望按月份选择数据并导出，用于每月核对。");
-  await page
-    .getByLabel("责任人", { exact: true })
-    .selectOption({ label: "验收成员" });
+  await expect(page.getByLabel("责任人", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("优先级", { exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("计划完成日期", { exact: true })).toHaveCount(0);
   const buffer = await sharp({
     create: { width: 320, height: 180, channels: 3, background: "#176958" },
   })
@@ -49,10 +49,35 @@ test("项目、功能项、新需求、图片、整改、复验关闭与刷新�
     .getByLabel("上传图片")
     .setInputFiles({ name: "sample.png", mimeType: "image/png", buffer });
   await expect(page.getByAltText("sample.png")).toBeVisible();
+  await page
+    .getByLabel("问题描述 *", { exact: true })
+    .evaluate((element, base64) => {
+      const bytes = Uint8Array.from(atob(base64), (c) => c.charCodeAt(0));
+      const clipboard = new DataTransfer();
+      clipboard.items.add(
+        new File([bytes], "clipboard-1.png", { type: "image/png" }),
+      );
+      clipboard.items.add(
+        new File([bytes], "clipboard-2.png", { type: "image/png" }),
+      );
+      element.dispatchEvent(
+        new ClipboardEvent("paste", {
+          clipboardData: clipboard,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+    }, buffer.toString("base64"));
+  await expect(page.getByAltText("clipboard-1.png")).toBeVisible();
+  await expect(page.getByAltText("clipboard-2.png")).toBeVisible();
   await page.getByRole("button", { name: "提交问题", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.getByRole("button", { name: "#001 增加按月份导出报表" }).click();
   await expect(page.getByAltText("sample.png")).toBeVisible();
+  await expect(page.getByAltText("clipboard-1.png")).toBeVisible();
+  await page
+    .getByLabel("责任人", { exact: true })
+    .selectOption({ label: "验收成员" });
   await page
     .getByLabel("整改措施 / 处理说明")
     .fill("已增加月份筛选和导出入口，请按相同月份复验。");

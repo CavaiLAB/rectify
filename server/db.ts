@@ -44,6 +44,17 @@ export function openDatabase(directory: string) {
       id TEXT PRIMARY KEY, issue_id TEXT NOT NULL REFERENCES issues(id), actor_id TEXT NOT NULL REFERENCES users(id),
       message TEXT NOT NULL, created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS integrations (
+      id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), name TEXT NOT NULL,
+      key_hash TEXT NOT NULL UNIQUE, key_hint TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1,
+      created_by TEXT NOT NULL REFERENCES users(id), created_at TEXT NOT NULL, last_used_at TEXT
+    );
+    CREATE TABLE IF NOT EXISTS external_submissions (
+      issue_id TEXT PRIMARY KEY REFERENCES issues(id), integration_id TEXT NOT NULL REFERENCES integrations(id),
+      request_id TEXT NOT NULL, fingerprint TEXT NOT NULL, reporter_id TEXT NOT NULL DEFAULT '',
+      reporter_name TEXT NOT NULL DEFAULT '', source_path TEXT NOT NULL DEFAULT '',
+      UNIQUE(integration_id, request_id)
+    );
     CREATE INDEX IF NOT EXISTS idx_issue_project ON issues(project_id, updated_at);
     CREATE INDEX IF NOT EXISTS idx_attachment_issue ON attachments(issue_id);
     CREATE INDEX IF NOT EXISTS idx_activity_issue ON activities(issue_id);

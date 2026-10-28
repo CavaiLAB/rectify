@@ -37,6 +37,8 @@ import {
   X,
 } from "lucide-react";
 import { api, json } from "./api";
+import { IntegrationPanel } from "./IntegrationPanel";
+import { pastedImages } from "./images";
 import {
   ISSUE_TYPES,
   PRIORITIES,
@@ -323,6 +325,7 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   );
   const [settings, setSettings] = useState(false);
   const [featureDialog, setFeatureDialog] = useState(false);
+  const [integrationDialog, setIntegrationDialog] = useState(false);
   const [issueDialog, setIssueDialog] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [search, setSearch] = useState("");
@@ -643,6 +646,14 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                   </p>
                 </div>
                 <div className="heading-actions">
+                  {user.role === "admin" && (
+                    <button
+                      className="button"
+                      onClick={() => setIntegrationDialog(true)}
+                    >
+                      外部接入
+                    </button>
+                  )}
                   <button
                     className="button"
                     onClick={() => setProjectDialog(project)}
@@ -930,6 +941,18 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
             await refresh();
           }}
         />
+      )}
+      {integrationDialog && project && (
+        <Modal
+          title="外部系统接入"
+          subtitle={project.name}
+          onClose={() => setIntegrationDialog(false)}
+        >
+          <IntegrationPanel
+            projectId={project.id}
+            archived={!!project.archived}
+          />
+        </Modal>
       )}
       {issueDialog && project && (
         <IssueDialog
@@ -1442,7 +1465,15 @@ function IssueDialog({
       const data = { ...values, assignee_id: values.assignee_id || null };
       if (isNew) {
         const form = new FormData();
-        form.append("data", JSON.stringify(data));
+        form.append(
+          "data",
+          JSON.stringify({
+            feature_id: data.feature_id,
+            title: data.title,
+            description: data.description,
+            type: data.type,
+          }),
+        );
         files.forEach((f) => form.append("images", f));
         await api(`/projects/${project.id}/issues`, {
           method: "POST",
@@ -1545,8 +1576,27 @@ function IssueDialog({
         </div>
       ) : (
         <form onSubmit={save}>
-          <div className="modal-body issue-editor">
+          <div
+            className="modal-body issue-editor"
+            onPaste={(event) => {
+              if (busy || readOnly) return;
+              const images = pastedImages(event.clipboardData);
+              if (images.length) {
+                event.preventDefault();
+                selectFiles(images);
+              }
+            }}
+          >
             <ErrorNote message={error} />
+            {detail?.source_system && (
+              <div className="info-note">
+                来源：{detail.source_system}
+                {detail.reporter_name
+                  ? ` · 提交人：${detail.reporter_name}`
+                  : ""}
+                {detail.source_path ? ` · 页面：${detail.source_path}` : ""}
+              </div>
+            )}
             {(isNew || detail) && (
               <>
                 <fieldset disabled={busy || readOnly}>
@@ -1643,38 +1693,42 @@ function IssueDialog({
                       }
                     />
                   </Field>
-                  <div className="form-grid thirds">
-                    <Field label="责任人">
-                      <select
-                        value={values.assignee_id}
-                        onChange={(e) => change("assignee_id", e.target.value)}
-                      >
-                        <option value="">暂不分配</option>
-                        {members.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.name}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                    <Field label="优先级">
-                      <select
-                        value={values.priority}
-                        onChange={(e) => change("priority", e.target.value)}
-                      >
-                        {PRIORITIES.map((p) => (
-                          <option key={p}>{p}</option>
-                        ))}
-                      </select>
-                    </Field>
-                    <Field label="计划完成日期">
-                      <input
-                        type="date"
-                        value={values.due_date}
-                        onChange={(e) => change("due_date", e.target.value)}
-                      />
-                    </Field>
-                  </div>
+                  {!isNew && (
+                    <div className="form-grid thirds">
+                      <Field label="责任人">
+                        <select
+                          value={values.assignee_id}
+                          onChange={(e) =>
+                            change("assignee_id", e.target.value)
+                          }
+                        >
+                          <option value="">暂不分配</option>
+                          {members.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.name}
+                            </option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="优先级">
+                        <select
+                          value={values.priority}
+                          onChange={(e) => change("priority", e.target.value)}
+                        >
+                          {PRIORITIES.map((p) => (
+                            <option key={p}>{p}</option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="计划完成日期">
+                        <input
+                          type="date"
+                          value={values.due_date}
+                          onChange={(e) => change("due_date", e.target.value)}
+                        />
+                      </Field>
+                    </div>
+                  )}
                   <section className="attachment-section">
                     <div className="field-label">
                       图片附件{" "}
@@ -1729,7 +1783,9 @@ function IssueDialog({
                         }}
                       >
                         <ImagePlus size={23} />
-                        <strong>点击选择图片，或拖拽到这里</strong>
+                        <strong>
+                          选择多张图片、拖拽，或 Ctrl/Cmd+V 粘贴截图
+                        </strong>
                         <span>PNG、JPG、WebP · 单张不超过8MB · 最多6张</span>
                         <input
                           aria-label="上传图片"
