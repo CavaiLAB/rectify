@@ -123,13 +123,19 @@ test("项目、功能项和新增需求保存成功；重复功能项不重复�
   assert.equal(same.id, feature.id);
   const result = await f.issue(project.id, feature.id, {
     type: "新增功能",
-    assignee_id: f.member.id,
   });
   assert.equal(result.status, 201);
   const issue = await result.json();
   assert.equal(issue.number, 1);
   assert.equal(issue.status, "待处理");
-  assert.equal(issue.assignee_name, "测试成员");
+  assert.equal(issue.assignee_name, null);
+  const assigned = await (
+    await f.request(`/issues/${issue.id}`, "PATCH", {
+      ...issue,
+      assignee_id: f.member.id,
+    })
+  ).json();
+  assert.equal(assigned.assignee_name, "测试成员");
   assert.equal((await (await f.request("/projects")).json())[0].issue_count, 1);
 });
 test("不能将问题关联到其他项目功能项或不存在的责任人", async (t) => {
@@ -431,4 +437,191 @@ test("日期和类型非法时不能入库，功能项重命名同步展示", as
     (await (await f.request(`/issues/${issue.id}`)).json()).feature_name,
     "更名功能",
   );
+});
+
+test("外部凭据仅能读取绑定项目功能项和提交，不能访问内部数据或其他项目", async (t) => {
+  const f = await fixture(t);
+  const one = await f.setup();
+  const two = await f.setup();
+  const key = await (
+    await f.request(`/projects/${one.project.id}/integrations`, "POST", {
+      name: "测试系统",
+    })
+  ).json();
+  const headers = {
+    Authorization: `Bearer ${key.api_key}`,
+    "Content-Type": "application/json",
+    "Idempotency-Key": "request-test-0001",
+  };
+  const external = (path: string, body?: unknown) =>
+    fetch(`${f.base}/api/external/v1${path}`, {
+      method: body ? "POST" : "GET",
+      headers,
+      body: body ? JSON.stringify(body) : undefined,
+    });
+  const features = await (await external("/features")).json();
+  assert.equal(features.features.length, 1);
+  assert.equal(features.features[0].id, one.feature.id);
+  assert.equal(
+    (await fetch(`${f.base}/api/projects`, { headers })).status,
+    401,
+  );
+  assert.equal((await external("/issues/internal-id")).status, 404);
+  assert.equal(
+    (
+      await external("/issues", {
+        feature_id: two.feature.id,
+        title: "反馈",
+        description: "不能跨项目",
+      })
+    ).status,
+    400,
+  );
+  assert.equal(
+    (
+      await external("/issues", {
+        feature_id: one.feature.id,
+        title: "反馈",
+        description: "不能指派",
+        assignee_id: f.admin.id,
+      })
+    ).status,
+    400,
+  );
+  const result = await external("/issues", {
+    feature_id: one.feature.id,
+    title: "反馈",
+    description: "客户只登记问题",
+    reporter_name: "虚构客户",
+    source_path: "/lab/report",
+  });
+  assert.equal(result.status, 201);
+  const receipt = await result.json();
+  assert.deepEqual(Object.keys(receipt).sort(), ["created_at", "id", "number"]);
+  const detail = await (await f.request(`/issues/${receipt.id}`)).json();
+  assert.equal(detail.assignee_id, null);
+  assert.equal(detail.priority, "普通");
+  assert.equal(detail.status, "待处理");
+  assert.equal(detail.source_system, "测试系统");
+  assert.equal(detail.reporter_name, "虚构客户");
+  assert.equal(
+    (
+      await external("/issues", {
+        feature_id: one.feature.id,
+        title: "反馈",
+        description: "不应传Token",
+        source_path: "/report?token=not-real",
+      })
+    ).status,
+    400,
+  );
+});
+
+test("外部图片批量提交可幂等重试，重复提交不会重复写问题或图片", async (t) => {
+  const f = await fixture(t);
+  const { project, feature } = await f.setup();
+  const integration = await (
+    await f.request(`/projects/${project.id}/integrations`, "POST", {
+      name: "测试接入",
+    })
+  ).json();
+  const buffer = await sharp({
+    create: { width: 4, height: 4, channels: 3, background: "#eee" },
+  })
+    .png()
+    .toBuffer();
+  function form(description = "带两张截图") {
+    const body = new FormData();
+    body.append(
+      "data",
+      JSON.stringify({ feature_id: feature.id, title: "多图", description }),
+    );
+    for (let i = 0; i < 2; i++)
+      body.append(
+        "images",
+        new Blob([new Uint8Array(buffer)], { type: "image/png" }),
+        `image-${i}.png`,
+      );
+    return body;
+  }
+  const headers = {
+    Authorization: `Bearer ${integration.api_key}`,
+    "Idempotency-Key": "stable-request-0002",
+  };
+  const send = (body: FormData) =>
+    fetch(`${f.base}/api/external/v1/issues`, {
+      method: "POST",
+      headers,
+      body,
+    });
+  const first = await send(form());
+  assert.equal(first.status, 201);
+  const receipt = await first.json();
+  const retry = await send(form());
+  assert.equal(retry.status, 200);
+  assert.deepEqual(await retry.json(), receipt);
+  const concurrent = await Promise.all([send(form()), send(form())]);
+  assert(concurrent.every((r) => r.status === 200));
+  assert.equal((await send(form("不同内容"))).status, 409);
+  assert.equal(readdirSync(join(f.dir, "uploads")).length, 2);
+  assert.equal(
+    (await (await f.request(`/projects/${project.id}/issues`)).json()).length,
+    1,
+  );
+});
+
+test("只有管理员可管理接入；凭据不明文存储，停用或归档立即阻止提交", async (t) => {
+  const f = await fixture(t);
+  const { project } = await f.setup();
+  const memberLogin = await f.request(
+    "/auth/login",
+    "POST",
+    { username: "member", password },
+    null,
+  );
+  const cookie = memberLogin.headers.get("set-cookie")!.split(";")[0];
+  assert.equal(
+    (
+      await f.request(
+        `/projects/${project.id}/integrations`,
+        "POST",
+        { name: "不能创建" },
+        cookie,
+      )
+    ).status,
+    403,
+  );
+  const integration = await (
+    await f.request(`/projects/${project.id}/integrations`, "POST", {
+      name: "可撤销",
+    })
+  ).json();
+  const listed = await (
+    await f.request(`/projects/${project.id}/integrations`)
+  ).json();
+  assert(!JSON.stringify(listed).includes(integration.api_key));
+  const stored = f.db
+    .prepare("SELECT key_hash FROM integrations WHERE id=?")
+    .get(integration.id)!;
+  assert.notEqual(stored.key_hash, integration.api_key);
+  const headers = { Authorization: `Bearer ${integration.api_key}` };
+  await f.request(`/projects/${project.id}`, "PATCH", {
+    name: project.name,
+    description: "",
+    archived: true,
+  });
+  assert.equal(
+    (await fetch(`${f.base}/api/external/v1/features`, { headers })).status,
+    409,
+  );
+  await f.request(
+    `/projects/${project.id}/integrations/${integration.id}/revoke`,
+    "POST",
+    {},
+  );
+  assert.equal(
+    (await fetch(`${f.base}/api/external/v1/features`, { headers })).status,
+    401,
+  );
+  assert.equal((await f.request("/external/v1/features")).status, 401);
 });

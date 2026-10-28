@@ -1052,6 +1052,26 @@ a {
   min-width: 0;
   font-size: 12px;
 }
+.integration-secret {
+  margin-top: 18px;
+  padding: 14px;
+  border: 1px solid #dcebe3;
+  border-radius: 8px;
+  background: #f6faf7;
+}
+.integration-secret strong {
+  font-size: 12px;
+}
+.integration-secret input {
+  margin: 10px 0;
+  font-family: monospace;
+  font-size: 11px;
+}
+.features-list small {
+  color: #8b9d92;
+  margin-left: 8px;
+  font-size: 10px;
+}
 .features-list {
   margin: 15px 0;
   max-height: 400px;

@@ -14,6 +14,10 @@ import { join, resolve } from "node:path";
 import { openDatabase, createUser, type DB } from "./db.ts";
 import { hashPassword, verifyPassword } from "./password.ts";
 import {
+  registerExternalRoutes,
+  registerIntegrationAdminRoutes,
+} from "./integrations.ts";
+import {
   ISSUE_TYPES,
   PRIORITIES,
   STATUSES,
@@ -51,9 +55,14 @@ const updateSchema = issueSchema.extend({
   resolution: z.string().trim().max(10000),
   verification: z.enum(VERIFICATIONS),
 });
+const registrationSchema = issueSchema
+  .pick({ feature_id: true, title: true, description: true, type: true })
+  .strict();
 const issueSelect = `SELECT i.*, f.name feature_name, u.name assignee_name,
+  g.name source_system, x.reporter_name, x.source_path,
   (SELECT COUNT(*) FROM attachments a WHERE a.issue_id=i.id) attachment_count
-  FROM issues i JOIN features f ON f.id=i.feature_id LEFT JOIN users u ON u.id=i.assignee_id`;
+  FROM issues i JOIN features f ON f.id=i.feature_id LEFT JOIN users u ON u.id=i.assignee_id
+  LEFT JOIN external_submissions x ON x.issue_id=i.id LEFT JOIN integrations g ON g.id=x.integration_id`;
 class HttpError extends Error {
   constructor(
     public status: number,
@@ -105,6 +114,32 @@ export function createApp(options: {
     next();
   });
   app.get("/api/health", (_req, res) => res.json({ ok: true }));
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      files: 6,
+      fileSize: 8 * 1024 * 1024,
+      fields: 2,
+      fieldSize: 64000,
+    },
+    fileFilter: (_req, file, cb) => {
+      if (!["image/jpeg", "image/png", "image/webp"].includes(file.mimetype))
+        cb(new HttpError(400, "仅支持 PNG、JPG、WebP 图片"));
+      else cb(null, true);
+    },
+  }).array("images", 6);
+  registerExternalRoutes(app, {
+    db,
+    upload,
+    fail,
+    project,
+    transaction: (action) => transaction(db, action),
+    validateReferences,
+    prepareImages,
+    storeImages,
+    cleanup,
+    activity,
+  });
   app.use("/api", (req, _res, next) => {
     if (
       !["GET", "HEAD", "OPTIONS"].includes(req.method) &&
@@ -176,6 +211,7 @@ export function createApp(options: {
       })
       .json({ ok: true });
   });
+  registerIntegrationAdminRoutes(app, { db, fail, project });
   app.post("/api/auth/password", loginLimit, async (req, res) => {
     const data = z
       .object({
@@ -346,20 +382,6 @@ export function createApp(options: {
         .all(req.params.id),
     );
   });
-  const upload = multer({
-    storage: multer.memoryStorage(),
-    limits: {
-      files: 6,
-      fileSize: 8 * 1024 * 1024,
-      fields: 2,
-      fieldSize: 64000,
-    },
-    fileFilter: (_req, file, cb) => {
-      if (!["image/jpeg", "image/png", "image/webp"].includes(file.mimetype))
-        cb(new HttpError(400, "仅支持 PNG、JPG、WebP 图片"));
-      else cb(null, true);
-    },
-  }).array("images", 6);
   const uploadLimit = rateLimit({
     windowMs: 60000,
     limit: 30,
@@ -376,9 +398,9 @@ export function createApp(options: {
     uploadLimit,
     upload,
     async (req, res) => {
-      const data = issueSchema.parse(parsePayload(req));
+      const data = registrationSchema.parse(parsePayload(req));
       const projectId = req.params.id as string;
-      validateReferences(projectId, data.feature_id, data.assignee_id);
+      validateReferences(projectId, data.feature_id, null);
       const images = await prepareImages(req);
       const id = randomUUID();
       try {
@@ -401,9 +423,9 @@ export function createApp(options: {
             data.title,
             data.description,
             data.type,
-            data.priority,
-            data.assignee_id,
-            data.due_date,
+            "普通",
+            null,
+            "",
             now,
             now,
           );
@@ -567,12 +589,10 @@ export function createApp(options: {
   app.use(
     (error: unknown, _req: Request, res: Response, _next: NextFunction) => {
       if (error instanceof z.ZodError)
-        return res
-          .status(400)
-          .json({
-            error: "请检查必填内容、字数和选项",
-            fields: error.issues.map((i) => i.path.join(".")),
-          });
+        return res.status(400).json({
+          error: "请检查必填内容、字数和选项",
+          fields: error.issues.map((i) => i.path.join(".")),
+        });
       if (error instanceof HttpError)
         return res.status(error.status).json({ error: error.message });
       if (error instanceof multer.MulterError)

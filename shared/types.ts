@@ -35,6 +35,9 @@ export interface Attachment {
   created_at: string;
 }
 export interface Issue {
+  source_system: string | null;
+  reporter_name: string | null;
+  source_path: string | null;
   id: string;
   number: number;
   project_id: string;
