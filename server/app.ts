@@ -107,7 +107,9 @@ export function createApp(options: {
   if (options.trustProxy) app.set("trust proxy", options.trustProxy);
   app.use(
     helmet({
-      contentSecurityPolicy: options.production ? undefined : false,
+      contentSecurityPolicy: options.production
+        ? { directives: { imgSrc: ["'self'", "data:", "blob:"] } }
+        : false,
       strictTransportSecurity: options.production ? undefined : false,
     }),
   );

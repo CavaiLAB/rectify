@@ -10,9 +10,12 @@ import { createUser, openDatabase } from "../server/db.ts";
 import type { Feature, IssueDetail, Project } from "../shared/types.ts";
 
 const password = "test-only-password-2026";
-async function fixture(t: TestContext) {
+async function fixture(
+  t: TestContext,
+  options: Partial<Parameters<typeof createApp>[0]> = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "rectify-api-test-"));
-  const { app, db } = createApp({ dataDir: dir });
+  const { app, db } = createApp({ ...options, dataDir: dir });
   const admin = await createUser(db, "admin", "测试管理员", password, "admin");
   const member = await createUser(db, "member", "测试成员", password, "member");
   const server = app.listen(0, "127.0.0.1");
@@ -76,6 +79,27 @@ async function fixture(t: TestContext) {
   }
   return { request, setup, issue, base, cookie, dir, db, admin, member };
 }
+
+test("生产响应允许本地图片预览、保留脚本限制与Secure Cookie，并返回构建版本", async (t) => {
+  const f = await fixture(t, { production: true, revision: "test-revision" });
+  const response = await f.request("/health");
+  assert.deepEqual(await response.json(), {
+    ok: true,
+    revision: "test-revision",
+  });
+  const csp = response.headers.get("content-security-policy")!;
+  assert.match(csp, /img-src 'self' data: blob:/);
+  assert.match(csp, /script-src 'self'/);
+  assert(!csp.includes("script-src 'self' 'unsafe-inline'"));
+  const login = await f.request(
+    "/auth/login",
+    "POST",
+    { username: "admin", password },
+    null,
+  );
+  assert.match(login.headers.get("set-cookie")!, /; Secure/);
+  assert.match(login.headers.get("set-cookie")!, /; HttpOnly/);
+});
 
 test("登记只传描述时自动生成标题，后续修改不重写既有标题", async (t) => {
   const f = await fixture(t);
