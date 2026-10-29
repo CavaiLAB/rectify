@@ -10,17 +10,13 @@ import { z } from "zod";
 import type { DB } from "./db.ts";
 import { ISSUE_TYPES } from "../shared/types.ts";
 import { summarizeIssueTitle } from "./issue-title.ts";
+import type { PreparedImage, StagedImage } from "./attachments.ts";
 
 interface Integration {
   id: string;
   project_id: string;
   name: string;
   created_by: string;
-}
-interface Image {
-  id: string;
-  name: string;
-  buffer: Buffer;
 }
 interface Services {
   db: DB;
@@ -33,9 +29,10 @@ interface Services {
     featureId: string,
     userId: string | null,
   ) => void;
-  prepareImages: (req: Request) => Promise<Image[]>;
-  storeImages: (issueId: string, images: Image[]) => void;
-  cleanup: (images: Image[]) => void;
+  prepareImages: (req: Request) => Promise<PreparedImage[]>;
+  stageImages: (images: PreparedImage[]) => Promise<StagedImage[]>;
+  storeImages: (issueId: string, images: StagedImage[]) => void;
+  cleanup: (images: StagedImage[]) => Promise<void>;
   activity: (issueId: string, actor: string, message: string) => void;
 }
 const hash = (value: string) =>
@@ -147,7 +144,7 @@ export function registerExternalRoutes(app: Express, s: Services) {
       }
       const reused = existing();
       if (reused) return res.json(reused);
-      const images = await s.prepareImages(req);
+      const images = await s.stageImages(await s.prepareImages(req));
       try {
         const result = s.transaction(() => {
           if (
@@ -202,9 +199,10 @@ export function registerExternalRoutes(app: Express, s: Services) {
           );
           return { created: true, receipt: receipt(id) };
         });
+        if (!result.created) await s.cleanup(images);
         res.status(result.created ? 201 : 200).json(result.receipt);
       } catch (error) {
-        s.cleanup(images);
+        await s.cleanup(images);
         throw error;
       }
     },

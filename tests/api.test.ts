@@ -1,6 +1,7 @@
 import { test, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, readdirSync } from "node:fs";
+import { mkdtempSync, rmSync, readdirSync, writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { once } from "node:events";
@@ -8,14 +9,39 @@ import sharp from "sharp";
 import { createApp } from "../server/app.ts";
 import { createUser, openDatabase } from "../server/db.ts";
 import type { Feature, IssueDetail, Project } from "../shared/types.ts";
+import { FakeOssStore } from "./fake-oss.ts";
+import { AttachmentManager } from "../server/attachments.ts";
 
 const password = "test-only-password-2026";
+async function pictureForm(featureId: string, count = 1) {
+  const bytes = await sharp({
+    create: { width: 12, height: 12, channels: 3, background: "#176958" },
+  })
+    .png()
+    .toBuffer();
+  const form = new FormData();
+  form.append(
+    "data",
+    JSON.stringify({
+      feature_id: featureId,
+      description: "测试反馈图片",
+      type: "问题缺陷",
+    }),
+  );
+  for (let i = 0; i < count; i++)
+    form.append(
+      "images",
+      new Blob([new Uint8Array(bytes)], { type: "image/png" }),
+      `image-${i}.png`,
+    );
+  return form;
+}
 async function fixture(
   t: TestContext,
   options: Partial<Parameters<typeof createApp>[0]> = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), "rectify-api-test-"));
-  const { app, db } = createApp({ ...options, dataDir: dir });
+  const { app, db, close } = createApp({ ...options, dataDir: dir });
   const admin = await createUser(db, "admin", "测试管理员", password, "admin");
   const member = await createUser(db, "member", "测试成员", password, "member");
   const server = app.listen(0, "127.0.0.1");
@@ -32,7 +58,7 @@ async function fixture(
   t.after(async () => {
     server.closeAllConnections();
     await new Promise<void>((r) => server.close(() => r()));
-    db.close();
+    await close();
     rmSync(dir, { recursive: true, force: true });
   });
   async function request(
@@ -86,6 +112,7 @@ test("生产响应允许本地图片预览、保留脚本限制与Secure Cookie�
   assert.deepEqual(await response.json(), {
     ok: true,
     revision: "test-revision",
+    storage: "local",
   });
   const csp = response.headers.get("content-security-policy")!;
   assert.match(csp, /img-src 'self' data: blob:/);
@@ -156,6 +183,209 @@ test("外部接口仅传描述也可登记，幂等重试不重复生成问题",
   assert.equal(detail.title, "导出失败，提示格式错误");
   assert.equal(
     (await (await f.request(`/projects/${project.id}/issues`)).json()).length,
+    1,
+  );
+});
+
+test("OSS附件不落本地，读取仍需登录且不向客户端返回存储地址", async (t) => {
+  const store = new FakeOssStore();
+  const f = await fixture(t, { attachmentStore: store });
+  const { project, feature } = await f.setup();
+  const response = await f.request(
+    `/projects/${project.id}/issues`,
+    "POST",
+    await pictureForm(feature.id, 2),
+  );
+  assert.equal(response.status, 201);
+  const issue = (await response.json()) as IssueDetail;
+  assert.equal(store.objects.size, 2);
+  assert.equal(readdirSync(join(f.dir, "uploads")).length, 0);
+  assert.equal(issue.attachments.length, 2);
+  assert(!JSON.stringify(issue).includes("test-private-bucket"));
+  const url = `/attachments/${issue.attachments[0].id}`;
+  assert.equal((await f.request(url, "GET", undefined, null)).status, 401);
+  assert.equal(store.getCalls, 0);
+  const image = await f.request(url);
+  assert.equal(image.status, 200);
+  assert.match(image.headers.get("cache-control")!, /private, no-store/);
+  assert.equal(image.headers.get("location"), null);
+  assert.equal(
+    (await sharp(Buffer.from(await image.arrayBuffer())).metadata()).format,
+    "webp",
+  );
+  const deleted = await f.request(url, "DELETE");
+  assert.equal(deleted.status, 200);
+  assert.equal((await deleted.json()).cleanupPending, false);
+  assert.equal(store.objects.size, 1);
+  assert.equal((await f.request(url)).status, 404);
+});
+
+test("OSS部分上传失败不产生问题或附件记录，暂存任务可重试回收", async (t) => {
+  const store = new FakeOssStore();
+  store.failPutAt = 2;
+  const f = await fixture(t, { attachmentStore: store });
+  const { project, feature } = await f.setup();
+  const response = await f.request(
+    `/projects/${project.id}/issues`,
+    "POST",
+    await pictureForm(feature.id, 3),
+  );
+  assert.equal(response.status, 503);
+  assert.equal(store.objects.size, 0);
+  assert.equal(f.db.prepare("SELECT count(*) n FROM issues").get()!.n, 0);
+  assert.equal(f.db.prepare("SELECT count(*) n FROM attachments").get()!.n, 0);
+  assert.equal(
+    f.db.prepare("SELECT count(*) n FROM attachment_cleanup").get()!.n,
+    1,
+  );
+  f.db.prepare("UPDATE attachment_cleanup SET not_before=0").run();
+  const restarted = new AttachmentManager(f.db, f.dir, store);
+  await restarted.collect();
+  await restarted.stop();
+  assert.equal(
+    f.db.prepare("SELECT count(*) n FROM attachment_cleanup").get()!.n,
+    0,
+  );
+});
+
+test("OSS删除失败仍隐藏附件并持久化清理任务，重试后只删该对象", async (t) => {
+  const store = new FakeOssStore();
+  const f = await fixture(t, { attachmentStore: store });
+  const { project, feature } = await f.setup();
+  const issue = (await (
+    await f.request(
+      `/projects/${project.id}/issues`,
+      "POST",
+      await pictureForm(feature.id, 2),
+    )
+  ).json()) as IssueDetail;
+  store.failDelete = true;
+  const response = await f.request(
+    `/attachments/${issue.attachments[0].id}`,
+    "DELETE",
+  );
+  assert.equal((await response.json()).cleanupPending, true);
+  assert.equal(store.objects.size, 2);
+  assert.equal(
+    (await f.request(`/attachments/${issue.attachments[0].id}`)).status,
+    404,
+  );
+  store.failDelete = false;
+  f.db.prepare("UPDATE attachment_cleanup SET not_before=0").run();
+  const manager = new AttachmentManager(f.db, f.dir, store);
+  await manager.collect();
+  await manager.stop();
+  assert.equal(store.objects.size, 1);
+  assert.equal(
+    (await f.request(`/attachments/${issue.attachments[1].id}`)).status,
+    200,
+  );
+});
+
+test("上传期间项目归档会拒绝提交并清理OSS暂存对象", async (t) => {
+  const store = new FakeOssStore();
+  const f = await fixture(t, { attachmentStore: store });
+  const { project, feature } = await f.setup();
+  store.beforePut = async () => {
+    f.db.prepare("UPDATE projects SET archived=1 WHERE id=?").run(project.id);
+  };
+  const result = await f.request(
+    `/projects/${project.id}/issues`,
+    "POST",
+    await pictureForm(feature.id),
+  );
+  assert.equal(result.status, 409);
+  assert.equal(store.objects.size, 0);
+  assert.equal(f.db.prepare("SELECT count(*) n FROM issues").get()!.n, 0);
+});
+
+test("外部并发幂等提交只保留一套OSS对象", async (t) => {
+  const store = new FakeOssStore();
+  const f = await fixture(t, { attachmentStore: store });
+  const { project, feature } = await f.setup();
+  const integration = await (
+    await f.request(`/projects/${project.id}/integrations`, "POST", {
+      name: "模拟接入",
+    })
+  ).json();
+  let release!: () => void;
+  const barrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  let entered = 0;
+  store.beforePut = async () => {
+    if (++entered === 2) release();
+    await barrier;
+  };
+  const send = async () =>
+    fetch(`${f.base}/api/external/v1/issues`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${integration.api_key}`,
+        "Idempotency-Key": "concurrent-oss-test",
+      },
+      body: await pictureForm(feature.id),
+    });
+  const responses = await Promise.all([send(), send()]);
+  assert.deepEqual(responses.map((r) => r.status).sort(), [200, 201]);
+  assert.deepEqual(await responses[0].json(), await responses[1].json());
+  assert.equal(store.objects.size, 1);
+  assert.equal(
+    f.db.prepare("SELECT count(*) n FROM attachment_cleanup").get()!.n,
+    0,
+  );
+});
+
+test("切到OSS后仍能读取历史本地附件；清理任务不会删除已提交对象", async (t) => {
+  const store = new FakeOssStore();
+  const f = await fixture(t, { attachmentStore: store });
+  const { project, feature } = await f.setup();
+  const issue = await (await f.issue(project.id, feature.id)).json();
+  const id = randomUUID();
+  const bytes = await sharp({
+    create: { width: 3, height: 3, channels: 3, background: "#fff" },
+  })
+    .webp()
+    .toBuffer();
+  writeFileSync(join(f.dir, "uploads", `${id}.webp`), bytes, { mode: 0o600 });
+  f.db
+    .prepare(
+      "INSERT INTO attachments (id,issue_id,name,size,created_at) VALUES(?,?,?,?,?)",
+    )
+    .run(id, issue.id, "旧图片.webp", bytes.length, new Date().toISOString());
+  assert.equal((await f.request(`/attachments/${id}`)).status, 200);
+  assert.equal(store.getCalls, 0);
+  f.db
+    .prepare(
+      "INSERT INTO attachment_cleanup (id,provider,bucket,object_key,not_before) VALUES(?,?,?,?,0)",
+    )
+    .run(id, "local", "", `${id}.webp`);
+  const manager = new AttachmentManager(f.db, f.dir, store);
+  await manager.collect();
+  await manager.stop();
+  assert.equal((await f.request(`/attachments/${id}`)).status, 200);
+});
+
+test("OSS故障或内容校验失败不改写附件元数据", async (t) => {
+  const store = new FakeOssStore();
+  const f = await fixture(t, { attachmentStore: store });
+  const { project, feature } = await f.setup();
+  const issue = (await (
+    await f.request(
+      `/projects/${project.id}/issues`,
+      "POST",
+      await pictureForm(feature.id),
+    )
+  ).json()) as IssueDetail;
+  const id = issue.attachments[0].id;
+  store.failGet = true;
+  assert.equal((await f.request(`/attachments/${id}`)).status, 503);
+  store.failGet = false;
+  const key = store.reference(id).key;
+  store.objects.set(key, Buffer.from("tampered"));
+  assert.equal((await f.request(`/attachments/${id}`)).status, 503);
+  assert.equal(
+    f.db.prepare("SELECT count(*) n FROM attachments WHERE id=?").get(id)!.n,
     1,
   );
 });

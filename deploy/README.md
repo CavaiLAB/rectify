@@ -6,7 +6,7 @@
 
 - 独立 namespace `rectify`，单副本 Deployment，`Recreate` 更新；不允许 SQLite 多副本写入。
 - PVC `rectify-data` 20Gi，独立 `rectify-local-retain` StorageClass，`Retain` 回收策略。数据在 qd 的 local-path 卷，**不是跨节点高可用**；20Gi 为申请大小，local-path 不提供可靠的文件系统容量配额。
-- 挂载 `/app/data`：SQLite、上传图片。容器 UID/GID 1000，根文件系统只读，临时缓存使用 `/tmp` emptyDir。
+- 挂载 `/app/data`：SQLite 与历史本地图片。新反馈图片存放于阿里云 OSS 私有桶，关联和清理任务仍在 SQLite 中。容器 UID/GID 1000，根文件系统只读，临时缓存使用 `/tmp` emptyDir。
 - 公网网关 `wg-hub` 终结 TLS，经 WireGuard 转发至专用 MetalLB `192.168.1.213:80`。不修改共享 Traefik 的请求超时或全局代理信任配置。
 - Service / NetworkPolicy 仅允许网关与 qd 管理入口。应用只信任网关 `10.77.0.1/32` 的转发头，网关覆盖客户端传入的相关头。
 - `COOKIE_SECURE=true`，未登录不能访问项目、问题或图片。账号与原数据迁移，不提供默认密码或公开注册。
@@ -20,6 +20,14 @@
 3. 首次部署先创建命名空间和存储，再在维护 Pod 导入数据；不要在应用正在写入时覆盖 SQLite。
 4. 使用 `deploy/argocd/application.yaml` 注册 Argo；核对渲染和差异后，只同步 `rectify`。
 5. 验证 Pod Ready、PVC Bound、镜像 digest、`/api/health` 的 `revision`、HTTPS 证书及未登录接口401。不只依赖 Argo Healthy。
+
+### OSS 私有附件
+
+- 桶：`deepsingularity-rectify-attachments-20261029`，地域 `oss-cn-hangzhou`，私有 ACL、禁止公共访问、默认 AES256 加密。
+- RAM 专用用户 `rectify-attachments-20261029`，策略 `RectifyAttachments20261029`；只允许该桶 `attachments/*` 的 HTTPS 读写删除，不授予其他桶权限。
+- 预先在 `rectify` 命名空间创建 Secret `rectify-oss-storage`，键为 `access-key-id`、`access-key-secret`。通过受限自动化或标准输入注入真实值，**不生成含真实值的仓库清单，不把值写进命令参数**。
+- Deployment 以只读0440文件挂载至 `/var/run/secrets/rectify-oss`，UID/fsGroup 1000 可读；缺少 Secret 时不得绕过或改用管理密钥。
+- 凭据更新后只重建 Rectify Pod，不修改 LM Secret。运行真实隔离冒烟验证及核实匿名403，详见[附件存储说明](../docs/attachment-storage.md)。
 
 首次空库可在容器交互终端执行 `npm run user:create -- --username admin --name 管理员` 设置密码。已有库迁移时不要再次初始化账号。
 
@@ -36,7 +44,7 @@
 - 导入后核对表数、附件哈希；至少做一次应用 Pod 重建后的数据保留检查。
 - 存储 `Retain` 不等于备份。初始迁移备份保留在管理机，**定期与离机备份需单独安排**。
 - 人工备份建议先将应用缩至0副本，使用同节点维护 Pod 打包整个卷，再恢复1副本。手动 Argo 同步期间不要并行操作备份。禁止只复制运行中的 `rectify.db` 而忽略 WAL 和附件。
-- 回退应用版本：在 Git 回退镜像 digest，通过 CI 后重新同步。回退数据：停应用后用验证过的完整备份恢复卷；不要在没有明确恢复目标时覆盖当前库。
+- OSS 上线后需同时备份数据库关联与云端对象，旧文件目录仍须保留。回退应用版本：选择 OSS 兼容镜像，在 Git 回退 digest，通过 CI 后重新同步；已有云端附件时不能回退到只读本地的旧版本。回退数据：停应用后用验证过的完整备份恢复卷；不要在没有明确恢复目标时覆盖当前库。
 
 ## LM 接入
 

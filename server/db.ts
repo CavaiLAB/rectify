@@ -40,6 +40,17 @@ export function openDatabase(directory: string) {
       id TEXT PRIMARY KEY, issue_id TEXT NOT NULL REFERENCES issues(id), name TEXT NOT NULL,
       size INTEGER NOT NULL, created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS attachment_objects (
+      attachment_id TEXT PRIMARY KEY REFERENCES attachments(id) ON DELETE CASCADE,
+      provider TEXT NOT NULL CHECK(provider IN ('local','oss')), bucket TEXT NOT NULL,
+      object_key TEXT NOT NULL, sha256 TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS attachment_cleanup (
+      id TEXT PRIMARY KEY, provider TEXT NOT NULL CHECK(provider IN ('local','oss')),
+      bucket TEXT NOT NULL, object_key TEXT NOT NULL, not_before INTEGER NOT NULL,
+      attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT ''
+    );
+    CREATE INDEX IF NOT EXISTS idx_attachment_cleanup_due ON attachment_cleanup(not_before);
     CREATE TABLE IF NOT EXISTS activities (
       id TEXT PRIMARY KEY, issue_id TEXT NOT NULL REFERENCES issues(id), actor_id TEXT NOT NULL REFERENCES users(id),
       message TEXT NOT NULL, created_at TEXT NOT NULL
