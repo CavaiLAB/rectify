@@ -51,6 +51,16 @@ spec:
               value: "true"
             - name: TRUSTED_PROXIES
               value: 10.77.0.1/32
+            - name: ATTACHMENT_STORAGE
+              value: oss
+            - name: OSS_BUCKET
+              value: deepsingularity-rectify-attachments-20261029
+            - name: OSS_REGION
+              value: oss-cn-hangzhou
+            - name: OSS_ACCESS_KEY_ID_FILE
+              value: /var/run/secrets/rectify-oss/access-key-id
+            - name: OSS_ACCESS_KEY_SECRET_FILE
+              value: /var/run/secrets/rectify-oss/access-key-secret
           resources:
             requests:
               cpu: 100m
@@ -86,6 +96,9 @@ spec:
               mountPath: /app/data
             - name: tmp
               mountPath: /tmp
+            - name: oss-credentials
+              mountPath: /var/run/secrets/rectify-oss
+              readOnly: true
       volumes:
         - name: data
           persistentVolumeClaim:
@@ -93,3 +106,7 @@ spec:
         - name: tmp
           emptyDir:
             sizeLimit: 256Mi
+        - name: oss-credentials
+          secret:
+            secretName: rectify-oss-storage
+            defaultMode: 288 # 0440，避免 YAML 版本导致八进制歧义

@@ -18,6 +18,7 @@ COPY --from=build --chown=node:node /app/dist ./dist
 COPY --chown=node:node server ./server
 COPY --chown=node:node shared ./shared
 COPY --chown=node:node scripts/create-user.ts ./scripts/create-user.ts
+COPY --chown=node:node scripts/verify-oss.ts ./scripts/verify-oss.ts
 USER node
 EXPOSE 3188
 VOLUME ["/app/data"]

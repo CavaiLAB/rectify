@@ -4,15 +4,15 @@ import { join } from "node:path";
 import { createApp } from "../server/app.ts";
 import { createUser } from "../server/db.ts";
 const directory = mkdtempSync(join(tmpdir(), "rectify-browser-test-"));
-const { app, db } = createApp({ dataDir: directory });
+const { app, db, close } = createApp({ dataDir: directory });
 await createUser(db, "tester", "验收成员", "browser-test-only-2026", "admin");
 const server = app.listen(4199, "127.0.0.1", () =>
   console.log("独立浏览器测试服务: http://127.0.0.1:4199"),
 );
 function stop() {
   server.closeAllConnections();
-  server.close(() => {
-    db.close();
+  server.close(async () => {
+    await close();
     rmSync(directory, { recursive: true, force: true });
     process.exit(0);
   });

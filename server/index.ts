@@ -1,8 +1,11 @@
 import { createApp } from "./app.ts";
+import { attachmentStoreFromEnv } from "./attachment-storage.ts";
 const port = Number(process.env.PORT ?? 3188);
 const host = process.env.HOST ?? "127.0.0.1";
-const { app, db } = createApp({
-  dataDir: process.env.DATA_DIR ?? "./data",
+const dataDir = process.env.DATA_DIR ?? "./data";
+const { app, close } = createApp({
+  dataDir,
+  attachmentStore: attachmentStoreFromEnv(dataDir),
   production: process.env.NODE_ENV === "production",
   secureCookies:
     process.env.COOKIE_SECURE === undefined
@@ -21,8 +24,8 @@ const server = app.listen(port, host, () =>
 );
 for (const signal of ["SIGINT", "SIGTERM"])
   process.on(signal, () =>
-    server.close(() => {
-      db.close();
+    server.close(async () => {
+      await close();
       process.exit(0);
     }),
   );

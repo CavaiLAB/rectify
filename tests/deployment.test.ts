@@ -28,6 +28,30 @@ test("k3s单实例、持久化、非root与HTTPS配置不退化", () => {
   assert.equal(env.COOKIE_SECURE, "true");
   assert.equal(env.TRUSTED_PROXIES, "10.77.0.1/32");
   assert(!("RECTIFY_BOOTSTRAP_PASSWORD" in env));
+  assert.equal(env.ATTACHMENT_STORAGE, "oss");
+  assert.equal(env.OSS_REGION, "oss-cn-hangzhou");
+  assert.match(env.OSS_BUCKET, /^deepsingularity-rectify-attachments-/);
+  assert.equal(
+    env.OSS_ACCESS_KEY_ID_FILE,
+    "/var/run/secrets/rectify-oss/access-key-id",
+  );
+  assert.equal(
+    env.OSS_ACCESS_KEY_SECRET_FILE,
+    "/var/run/secrets/rectify-oss/access-key-secret",
+  );
+  assert(!("OSS_ACCESS_KEY_ID" in env));
+  assert(!("OSS_ACCESS_KEY_SECRET" in env));
+  const secret = pod.volumes.find(
+    (v: { name: string }) => v.name === "oss-credentials",
+  ).secret;
+  assert.equal(secret.secretName, "rectify-oss-storage");
+  assert.equal(secret.defaultMode, 0o440);
+  assert.equal(
+    container.volumeMounts.find(
+      (v: { name: string }) => v.name === "oss-credentials",
+    ).readOnly,
+    true,
+  );
 });
 test("存储Retain、外部入口限制来源，Argo不自动prune", () => {
   const storage = parseAllDocuments(

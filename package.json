@@ -18,6 +18,7 @@
     "check": "npm run build && npm test"
   },
   "dependencies": {
+    "ali-oss": "^6.23.0",
     "express": "^5.1.0",
     "express-rate-limit": "^8.1.0",
     "helmet": "^8.1.0",
@@ -31,6 +32,7 @@
   },
   "devDependencies": {
     "@playwright/test": "^1.56.0",
+    "@types/ali-oss": "^6.23.4",
     "@types/express": "^5.0.3",
     "@types/multer": "^2.0.0",
     "@types/node": "^24.9.0",

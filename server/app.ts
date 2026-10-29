@@ -9,11 +9,17 @@ import multer from "multer";
 import sharp from "sharp";
 import { z } from "zod";
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { mkdirSync, writeFileSync, unlinkSync, existsSync } from "node:fs";
+import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { openDatabase, createUser, type DB } from "./db.ts";
 import { hashPassword, verifyPassword } from "./password.ts";
 import { summarizeIssueTitle } from "./issue-title.ts";
+import { AttachmentManager } from "./attachments.ts";
+import {
+  AttachmentNotFound,
+  AttachmentStorageError,
+  type AttachmentStore,
+} from "./attachment-storage.ts";
 import {
   registerExternalRoutes,
   registerIntegrationAdminRoutes,
@@ -98,10 +104,15 @@ export function createApp(options: {
   trustProxy?: number | string | string[];
   revision?: string;
   webDir?: string;
+  attachmentStore?: AttachmentStore;
 }) {
   const db = openDatabase(options.dataDir);
-  const uploads = resolve(options.dataDir, "uploads");
-  mkdirSync(uploads, { recursive: true, mode: 0o700 });
+  const attachments = new AttachmentManager(
+    db,
+    options.dataDir,
+    options.attachmentStore,
+  );
+  attachments.start();
   const app = express();
   app.disable("x-powered-by");
   if (options.trustProxy) app.set("trust proxy", options.trustProxy);
@@ -119,7 +130,11 @@ export function createApp(options: {
     next();
   });
   app.get("/api/health", (_req, res) =>
-    res.json({ ok: true, revision: options.revision ?? "development" }),
+    res.json({
+      ok: true,
+      revision: options.revision ?? "development",
+      storage: attachments.provider,
+    }),
   );
   const upload = multer({
     storage: multer.memoryStorage(),
@@ -143,8 +158,9 @@ export function createApp(options: {
     transaction: (action) => transaction(db, action),
     validateReferences,
     prepareImages,
-    storeImages,
-    cleanup,
+    stageImages: (images) => attachments.stage(images),
+    storeImages: (issueId, images) => attachments.commit(issueId, images),
+    cleanup: (images) => attachments.discard(images),
     activity,
   });
   app.use("/api", (req, _res, next) => {
@@ -408,7 +424,7 @@ export function createApp(options: {
       const data = registrationSchema.parse(parsePayload(req));
       const projectId = req.params.id as string;
       validateReferences(projectId, data.feature_id, null);
-      const images = await prepareImages(req);
+      const images = await attachments.stage(await prepareImages(req));
       const id = randomUUID();
       try {
         transaction(db, () => {
@@ -436,11 +452,11 @@ export function createApp(options: {
             now,
             now,
           );
-          storeImages(id, images);
+          attachments.commit(id, images);
           activity(id, res.locals.user.id, "登记了问题");
         });
       } catch (e) {
-        cleanup(images);
+        await attachments.discard(images);
         throw e;
       }
       res.status(201).json(detail(id));
@@ -532,8 +548,14 @@ export function createApp(options: {
     upload,
     async (req, res) => {
       const current = issue(req.params.id as string, true);
-      const images = await prepareImages(req);
-      if (!images.length) fail(400, "请选择图片");
+      const prepared = await prepareImages(req);
+      if (!prepared.length) fail(400, "请选择图片");
+      const existingCount = db
+        .prepare("SELECT count(*) n FROM attachments WHERE issue_id=?")
+        .get(current.id) as { n: number };
+      if (existingCount.n + prepared.length > 6)
+        fail(400, "每个问题最多6张图片");
+      const images = await attachments.stage(prepared);
       try {
         transaction(db, () => {
           issue(current.id, true);
@@ -541,7 +563,7 @@ export function createApp(options: {
             .prepare("SELECT COUNT(*) n FROM attachments WHERE issue_id=?")
             .get(current.id) as { n: number };
           if (count.n + images.length > 6) fail(400, "每个问题最多6张图片");
-          storeImages(current.id, images);
+          attachments.commit(current.id, images);
           activity(
             current.id,
             res.locals.user.id,
@@ -550,26 +572,31 @@ export function createApp(options: {
           touch(current.id);
         });
       } catch (e) {
-        cleanup(images);
+        await attachments.discard(images);
         throw e;
       }
       res.status(201).json(detail(current.id));
     },
   );
-  app.get("/api/attachments/:id", (req, res) => {
+  app.get("/api/attachments/:id", async (req, res) => {
     const record = db
       .prepare("SELECT * FROM attachments WHERE id=?")
       .get(req.params.id);
     if (!record) fail(404, "图片不存在");
-    res.type("webp").sendFile(join(uploads, `${record.id}.webp`));
+    const bytes = await attachments.read(
+      String(record.id),
+      Number(record.size),
+    );
+    res.type("webp").set("Cache-Control", "private, no-store").send(bytes);
   });
-  app.delete("/api/attachments/:id", (req, res) => {
+  app.delete("/api/attachments/:id", async (req, res) => {
     const record = db
       .prepare("SELECT * FROM attachments WHERE id=?")
       .get(req.params.id);
     if (!record) fail(404, "图片不存在");
     issue(String(record.issue_id), true);
     transaction(db, () => {
+      attachments.queueDelete(String(record.id));
       db.prepare("DELETE FROM attachments WHERE id=?").run(req.params.id);
       activity(
         String(record.issue_id),
@@ -578,12 +605,13 @@ export function createApp(options: {
       );
       touch(String(record.issue_id));
     });
-    try {
-      unlinkSync(join(uploads, `${record.id}.webp`));
-    } catch {
-      /* 未引用文件可在停机备份时清理。 */
-    }
-    res.json({ ok: true });
+    await attachments.cleanOne(String(record.id));
+    res.json({
+      ok: true,
+      cleanupPending: !!db
+        .prepare("SELECT id FROM attachment_cleanup WHERE id=?")
+        .get(String(record.id)),
+    });
   });
   app.use("/api", (_req, _res) => fail(404, "接口不存在"));
   const webDir = resolve(options.webDir ?? "dist");
@@ -595,6 +623,14 @@ export function createApp(options: {
   }
   app.use(
     (error: unknown, _req: Request, res: Response, _next: NextFunction) => {
+      if (error instanceof AttachmentNotFound)
+        return res.status(404).json({ error: "图片不存在或已移除" });
+      if (error instanceof AttachmentStorageError) {
+        console.error("附件存储操作失败", error.code);
+        return res
+          .status(503)
+          .json({ error: "附件存储暂不可用，请保留内容后重试" });
+      }
       if (error instanceof z.ZodError)
         return res.status(400).json({
           error: "请检查必填内容、字数和选项",
@@ -736,32 +772,12 @@ export function createApp(options: {
     }
     return results;
   }
-  function storeImages(
-    issueId: string,
-    images: { id: string; name: string; buffer: Buffer }[],
-  ) {
-    for (const image of images) {
-      writeFileSync(join(uploads, `${image.id}.webp`), image.buffer, {
-        flag: "wx",
-        mode: 0o600,
-      });
-      db.prepare("INSERT INTO attachments VALUES (?, ?, ?, ?, ?)").run(
-        image.id,
-        issueId,
-        image.name,
-        image.buffer.length,
-        new Date().toISOString(),
-      );
-    }
-  }
-  function cleanup(images: { id: string }[]) {
-    for (const image of images) {
-      try {
-        unlinkSync(join(uploads, `${image.id}.webp`));
-      } catch {
-        /* 事务回滚时可能尚未写入。 */
-      }
-    }
-  }
-  return { app, db };
+  return {
+    app,
+    db,
+    close: async () => {
+      await attachments.stop();
+      db.close();
+    },
+  };
 }
