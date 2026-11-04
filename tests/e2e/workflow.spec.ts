@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import sharp from "sharp";
+import ExcelJS from "exceljs";
 test("项目、功能项、新需求、图片、整改、复验关闭与刷新持久化", async ({
   page,
 }, testInfo) => {
@@ -109,8 +110,23 @@ test("项目、功能项、新需求、图片、整改、复验关闭与刷新�
     fullPage: true,
   });
   await page.getByRole("button", { name: "关闭弹窗" }).click();
+  const downloaded = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出 Excel", exact: true }).click();
+  const file = await downloaded;
+  expect(file.suggestedFilename()).toBe(`${name}_问题整改清单.xlsx`);
+  await file.saveAs(testInfo.outputPath("export.xlsx"));
+  const workbook = new ExcelJS.Workbook();
+  await workbook.xlsx.readFile((await file.path())!);
+  const sheet = workbook.worksheets[0];
+  expect(sheet.getCell("F6").value).toBe("验收成员");
+  expect(sheet.getCell("I6").value).toBe("已关闭");
+  expect(sheet.getCell("H6").value).toBeInstanceOf(Date);
+  expect(sheet.getCell("H6").numFmt).toBe("yyyy-mm-dd");
   await page.getByLabel("搜索问题").fill("不存在的关键词");
   await expect(page.getByText("没有符合条件的问题")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "导出 Excel", exact: true }),
+  ).toBeDisabled();
   await page.getByLabel("搜索问题").fill("");
   await page.screenshot({
     path: testInfo.outputPath("workspace.png"),

@@ -498,6 +498,7 @@ test("整改说明、复验通过、关闭和返工状态校验", async (t) => {
     })
   ).json();
   assert(ready.completed_at);
+  assert.equal(ready.closed_at, null);
   assert.equal(
     (
       await f.request(`/issues/${issue.id}`, "PATCH", {
@@ -515,15 +516,67 @@ test("整改说明、复验通过、关闭和返工状态校验", async (t) => {
     })
   ).json();
   assert.equal(closed.status, "已关闭");
+  assert(closed.closed_at);
+  const savedClosed = await (
+    await f.request(`/issues/${issue.id}`, "PATCH", {
+      ...closed,
+      resolution: "补充整改说明",
+    })
+  ).json();
+  assert.equal(savedClosed.closed_at, closed.closed_at);
   assert.equal(closed.activities.length, 3);
   const reopened = await (
     await f.request(`/issues/${issue.id}`, "PATCH", {
-      ...closed,
+      ...savedClosed,
       status: "处理中",
       verification: "不通过",
     })
   ).json();
   assert.equal(reopened.completed_at, null);
+  assert.equal(reopened.closed_at, null);
+});
+
+test("旧库关闭日期按历史关闭事件回填，重启不覆盖", async (t) => {
+  const f = await fixture(t);
+  const { project, feature } = await f.setup();
+  const item = await (await f.issue(project.id, feature.id)).json();
+  f.db
+    .prepare(
+      "UPDATE issues SET status='已关闭', completed_at=?, updated_at=? WHERE id=?",
+    )
+    .run("2026-10-29T00:00:00Z", "2026-11-04T00:00:00Z", item.id);
+  f.db
+    .prepare(
+      "INSERT INTO activities (id,issue_id,actor_id,message,created_at) VALUES (?,?,?,?,?)",
+    )
+    .run(
+      randomUUID(),
+      item.id,
+      f.admin.id,
+      "状态：待复验 → 已关闭；更新了复验结果",
+      "2026-10-30T00:00:00Z",
+    );
+  f.db.exec("ALTER TABLE issues DROP COLUMN closed_at");
+  const migrated = openDatabase(f.dir);
+  assert.equal(
+    (
+      migrated
+        .prepare("SELECT closed_at FROM issues WHERE id=?")
+        .get(item.id) as { closed_at: string }
+    ).closed_at,
+    "2026-10-30T00:00:00Z",
+  );
+  migrated.close();
+  const again = openDatabase(f.dir);
+  assert.equal(
+    (
+      again.prepare("SELECT closed_at FROM issues WHERE id=?").get(item.id) as {
+        closed_at: string;
+      }
+    ).closed_at,
+    "2026-10-30T00:00:00Z",
+  );
+  again.close();
 });
 test("旧版本修改返回409，不覆盖他人的修改", async (t) => {
   const f = await fixture(t);

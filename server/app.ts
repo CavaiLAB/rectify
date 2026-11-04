@@ -481,6 +481,10 @@ export function createApp(options: {
     const completed = ["待复验", "已关闭"].includes(data.status)
       ? current.completed_at || new Date().toISOString()
       : null;
+    const closed =
+      data.status === "已关闭"
+        ? current.closed_at || new Date().toISOString()
+        : null;
     const labels: Record<string, string> = {
       title: "标题",
       description: "问题描述",
@@ -509,7 +513,7 @@ export function createApp(options: {
         .join("；") || "保存了问题";
     transaction(db, () => {
       db.prepare(
-        `UPDATE issues SET feature_id=?, title=?, description=?, type=?, status=?, priority=?, assignee_id=?, due_date=?, resolution=?, verification=?, completed_at=?, updated_at=?, version=version+1 WHERE id=?`,
+        `UPDATE issues SET feature_id=?, title=?, description=?, type=?, status=?, priority=?, assignee_id=?, due_date=?, resolution=?, verification=?, completed_at=?, closed_at=?, updated_at=?, version=version+1 WHERE id=?`,
       ).run(
         data.feature_id,
         data.title,
@@ -522,6 +526,7 @@ export function createApp(options: {
         data.resolution,
         data.verification,
         completed,
+        closed,
         new Date().toISOString(),
         current.id,
       );
