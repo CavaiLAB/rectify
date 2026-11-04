@@ -54,6 +54,7 @@ export interface Issue {
   resolution: string;
   verification: (typeof VERIFICATIONS)[number];
   completed_at: string | null;
+  closed_at: string | null;
   created_at: string;
   updated_at: string;
   version: number;

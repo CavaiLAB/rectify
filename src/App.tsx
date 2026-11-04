@@ -334,6 +334,19 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
   const [feature, setFeature] = useState("");
   const [onlyMine, setOnlyMine] = useState(false);
   const [toast, setToast] = useState("");
+  const [exporting, setExporting] = useState(false);
+  async function exportIssues(items: Issue[], name: string) {
+    setExporting(true);
+    try {
+      const { downloadIssueWorkbook } = await import("./exportIssues.ts");
+      await downloadIssueWorkbook(items, name);
+      setToast("Excel 清单已导出");
+    } catch {
+      setError("Excel 导出失败，请重试");
+    } finally {
+      setExporting(false);
+    }
+  }
   const project = projects.find((p) => p.id === selected);
   async function loadProjects() {
     setProjects(await api<Project[]>("/projects"));
@@ -713,11 +726,11 @@ function Workspace({ user, onLogout }: { user: User; onLogout: () => void }) {
                     </button>
                     <button
                       className="text-button"
-                      disabled={!filtered.length}
-                      onClick={() => downloadCsv(filtered, project.name)}
+                      disabled={!filtered.length || exporting}
+                      onClick={() => exportIssues(filtered, project.name)}
                     >
                       <ArrowDownToLine size={15} />
-                      导出清单
+                      {exporting ? "正在导出…" : "导出 Excel"}
                     </button>
                   </div>
                 </div>
@@ -1952,53 +1965,4 @@ function FilePreview({ file, remove }: { file: File; remove: () => void }) {
       </button>
     </div>
   );
-}
-function downloadCsv(issues: Issue[], projectName: string) {
-  const safe = (value: unknown) => {
-    const text = String(value ?? "");
-    return `"${(/^[\s]*[=+@\-\t\r]/.test(text) ? `'${text}` : text).replace(/"/g, '""')}"`;
-  };
-  const rows: unknown[][] = [
-    [
-      "编号",
-      "功能项",
-      "问题标题",
-      "问题类型",
-      "问题描述",
-      "状态",
-      "优先级",
-      "责任人",
-      "计划完成日期",
-      "整改措施",
-      "复验结果",
-      "整改完成时间",
-    ],
-  ];
-  issues.forEach((i) =>
-    rows.push([
-      i.number,
-      i.feature_name,
-      i.title,
-      i.type,
-      i.description,
-      i.status,
-      i.priority,
-      i.assignee_name,
-      i.due_date,
-      i.resolution,
-      i.verification,
-      i.completed_at,
-    ]),
-  );
-  const url = URL.createObjectURL(
-    new Blob(
-      ["\uFEFF" + rows.map((row) => row.map(safe).join(",")).join("\r\n")],
-      { type: "text/csv;charset=utf-8" },
-    ),
-  );
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = `${projectName.replace(/[\\/:*?"<>|]/g, "_")}_问题整改清单.csv`;
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }

@@ -71,6 +71,19 @@ export function openDatabase(directory: string) {
     CREATE INDEX IF NOT EXISTS idx_activity_issue ON activities(issue_id);
     CREATE INDEX IF NOT EXISTS idx_session_expiry ON sessions(expires_at);
   `);
+  const columns = db.prepare("PRAGMA table_info(issues)").all() as {
+    name: string;
+  }[];
+  if (!columns.some((column) => column.name === "closed_at")) {
+    db.exec(`
+      ALTER TABLE issues ADD COLUMN closed_at TEXT;
+      UPDATE issues SET closed_at = COALESCE(
+        (SELECT MAX(created_at) FROM activities
+          WHERE issue_id = issues.id AND message LIKE '状态：% → 已关闭%'),
+        completed_at, updated_at
+      ) WHERE status = '已关闭';
+    `);
+  }
   return db;
 }
 export type DB = ReturnType<typeof openDatabase>;
